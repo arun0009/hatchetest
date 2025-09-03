@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -180,47 +181,13 @@ func (s *SharedTestSuite) setupContainersOnly() {
 	}
 	tokenStr := strings.TrimSpace(string(tokenBytes))
 
-	// Extract JWT token from output - find the eyJ pattern and extract the full JWT
-	// Remove any non-printable characters first
-	cleanStr := strings.Map(func(r rune) rune {
-		if r < 32 || r > 126 {
-			return -1
-		}
-		return r
-	}, tokenStr)
-
-	// Find the start of the JWT token (eyJ)
-	eyJIndex := strings.Index(cleanStr, "eyJ")
-	if eyJIndex == -1 {
-		log.Fatalf("Failed to find JWT token in output: %s", cleanStr)
+	re := regexp.MustCompile(`eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*`)
+	matches := re.FindStringSubmatch(tokenStr)
+	if len(matches) == 0 {
+		log.Fatalf("Failed to find JWT token in output: %s", tokenStr)
 	}
+	token := matches[0]
 
-	// Extract from eyJ to the end, then find the complete JWT (3 parts separated by dots)
-	tokenPart := cleanStr[eyJIndex:]
-
-	// Find the end of the JWT token by looking for the next non-JWT character after the third dot
-	parts := strings.Split(tokenPart, ".")
-	if len(parts) < 3 {
-		log.Fatalf("JWT token doesn't have 3 parts: %s", tokenPart)
-	}
-
-	// Reconstruct the JWT with just the 3 parts, removing any trailing content
-	jwtPart3 := parts[2]
-	// Remove any non-base64url characters from the third part
-	cleanPart3 := ""
-	for _, r := range jwtPart3 {
-		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			cleanPart3 += string(r)
-		} else {
-			break // Stop at first non-base64url character
-		}
-	}
-
-	token := parts[0] + "." + parts[1] + "." + cleanPart3
-
-	if token == "" || strings.Count(token, ".") != 2 {
-		log.Fatalf("Failed to construct valid JWT token from: %s", tokenPart)
-	}
 	log.Printf("Generated token: %s", token)
 
 	// Set environment variables for Hatchet client (same approach as main.go)
@@ -281,9 +248,6 @@ func (s *SharedTestSuite) SetupSuite() {
 
 	// Start Hatchet Lite container
 	s.startHatchetContainer(ctx)
-
-	// Create real Hatchet client
-	s.createHatchetClient(ctx)
 
 	// Start unified test server
 	s.startTestServer()
@@ -379,61 +343,6 @@ func (s *SharedTestSuite) startHatchetContainer(ctx context.Context) {
 	s.Require().NoError(err, "Failed to get hatchet http port")
 
 	s.HatchetURL = fmt.Sprintf("http://%s:%s", host, httpPort.Port())
-}
-
-func (s *SharedTestSuite) createHatchetClient(ctx context.Context) {
-	// Get GRPC port for client connection
-	grpcPort, err := s.hatchetContainer.MappedPort(ctx, "7077")
-	if err != nil {
-		log.Fatalf("Failed to get hatchet grpc port: %v", err)
-	}
-
-	// Get HTTP port for server URL
-	httpPort, err := s.hatchetContainer.MappedPort(ctx, "8888")
-	if err != nil {
-		log.Fatalf("Failed to get hatchet http port: %v", err)
-	}
-
-	host, err := s.hatchetContainer.Host(ctx)
-	if err != nil {
-		log.Fatalf("Failed to get hatchet host: %v", err)
-	}
-
-	// Set required environment variables for Hatchet v1 client
-	hostPort := fmt.Sprintf("%s:%d", host, grpcPort.Int())
-	serverURL := fmt.Sprintf("http://%s:%d", host, httpPort.Int())
-	os.Setenv("HATCHET_CLIENT_HOST_PORT", hostPort)
-	os.Setenv("HATCHET_CLIENT_SERVER_URL", serverURL)
-	os.Setenv("HATCHET_CLIENT_TOKEN", "test-token-for-integration")
-
-	log.Printf("✅ Hatchet container available at:")
-	log.Printf("   GRPC: %s:%d", host, grpcPort.Int())
-	log.Printf("   HTTP: %s", serverURL)
-
-	// Verify Hatchet container is accessible by making HTTP health check
-	healthURL := fmt.Sprintf("%s/health", serverURL)
-	resp, err := http.Get(healthURL)
-	if err != nil {
-		log.Fatalf("Failed to connect to Hatchet container: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("Hatchet container health check failed: status %d", resp.StatusCode)
-	}
-	resp.Body.Close()
-
-	// Create a real Hatchet client for integration tests
-	hatchetClient, err := client.New(
-		client.WithHostPort(host, grpcPort.Int()),
-	)
-	if err != nil {
-		log.Printf("⚠️ Failed to create Hatchet client for tests: %v", err)
-		s.HatchetClient = nil
-	} else {
-		s.HatchetClient = hatchetClient
-		log.Printf("✅ Hatchet client created for integration tests")
-	}
-
-	log.Printf("✅ Hatchet container health check passed - ready for integration tests")
 }
 
 func (s *SharedTestSuite) startTestServer() {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net/http/httptest"
 	"testing"
 
 	"github.com/arun0009/hatchetest/pkg/testsuite"
@@ -11,7 +10,6 @@ import (
 // IntegrationTestSuite combines all modules for integration testing
 type IntegrationTestSuite struct {
 	testsuite.SharedTestSuite
-	MockHTTPServer *httptest.Server
 }
 
 // SetupSuite starts containers and registers all modules
@@ -38,7 +36,6 @@ func (s *IntegrationTestSuite) TestGlobalSharedContainers() {
 	s.T().Log("✅ Postgres container is running")
 	s.T().Log("✅ Hatchet container is running at:", s.HatchetURL)
 	s.T().Log("✅ Test server is running at:", s.TestServerURL)
-	s.T().Log("✅ Mock HTTP server is running at:", s.MockHTTPServer.URL)
 }
 
 // TestModuleIntegrationWithSharedContainers verifies module tests work with shared containers
